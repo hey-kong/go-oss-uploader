@@ -1,37 +1,27 @@
-package main
+package uploader
 
 import (
 	"log"
+	"path"
 	"regexp"
 	"strings"
 	"time"
 
-	"go-oss-uploader/common/constants"
-	"go-oss-uploader/common/ossutil"
-	"go-oss-uploader/common/util"
-
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	"github.com/hey-kong/go-oss-uploader/common/configs"
+	"github.com/hey-kong/go-oss-uploader/common/ossutil"
 	"github.com/radovskyb/watcher"
 )
 
-func main() {
-	// Get required environment variables
-	watchPath := util.GetEnvOrPanic("WATCH_DATA_PATH")
-	jobKey := util.GetEnvOrPanic("JOB_KEY")
-	pathPattern := util.GetEnv("PATH_PATTERN", ".*[^swp]$")
-	watchInterval, err := util.GetEnvAsInt("WATCH_INTERVAL", 2)
-	if err != nil {
-		log.Fatalf("Unable to parse WATCH_INTERVAL as integer\n")
-	}
-
+func Upload() {
 	// Instantiate OSS client
-	client, err := oss.New(constants.Endpoint, constants.AccessKeyID, constants.AccessKeySecret)
+	client, err := oss.New(configs.Endpoint, configs.AccessKeyID, configs.AccessKeySecret)
 	if err != nil {
 		log.Fatalf("Error: %v\n", err)
 	}
 
 	// Instantiate OSS bucket
-	bucket, err := client.Bucket(constants.Bucket)
+	bucket, err := client.Bucket(configs.Bucket)
 	if err != nil {
 		log.Fatalf("Error: %v\n", err)
 	}
@@ -41,8 +31,8 @@ func main() {
 	w.FilterOps(watcher.Create, watcher.Write, watcher.Remove, watcher.Rename)
 
 	// Only files that match the regular expression during file listings will be watched
-	if pathPattern != "" {
-		r := regexp.MustCompile(pathPattern)
+	if configs.PathPattern != "" {
+		r := regexp.MustCompile(configs.PathPattern)
 		w.AddFilterHook(watcher.RegexFilterHook(r, false))
 	}
 
@@ -53,17 +43,17 @@ func main() {
 				if event.IsDir() {
 					continue
 				}
-				filePath := strings.Replace(event.Path, watchPath, "", 1)
+				file := strings.Replace(event.Path, configs.WatchPath, "", 1)
 				if event.Op == watcher.Remove {
-					objectKey := ossutil.GenObjectKey(jobKey, constants.DataHub, filePath)
+					objectKey := path.Join(configs.KeyPrefix, file)
 					go ossutil.Remove(bucket, objectKey)
 				} else if event.Op == watcher.Rename {
-					oldFilePath := strings.Replace(event.OldPath, watchPath, "", 1)
-					srcObject := ossutil.GenObjectKey(jobKey, constants.DataHub, oldFilePath)
-					destObject := ossutil.GenObjectKey(jobKey, constants.DataHub, filePath)
+					oldFilePath := strings.Replace(event.OldPath, configs.WatchPath, "", 1)
+					srcObject := path.Join(configs.KeyPrefix, oldFilePath)
+					destObject := path.Join(configs.KeyPrefix, file)
 					go ossutil.Rename(bucket, srcObject, destObject)
 				} else {
-					objectKey := ossutil.GenObjectKey(jobKey, constants.DataHub, filePath)
+					objectKey := path.Join(configs.KeyPrefix, file)
 					go ossutil.Upload(bucket, event.Path, objectKey)
 				}
 			case err = <-w.Error:
@@ -75,12 +65,13 @@ func main() {
 	}()
 
 	// Watch folder recursively for changes
-	if err = w.AddRecursive(watchPath); err != nil {
+	if err = w.AddRecursive(configs.WatchPath); err != nil {
 		log.Fatalln(err)
 	}
+
 	// Start the watching process
-	log.Printf("Watching: %v\n", watchPath)
-	if err = w.Start(time.Duration(watchInterval) * time.Second); err != nil {
+	log.Printf("Watching: %v\n", configs.WatchPath)
+	if err = w.Start(time.Duration(configs.WatchInterval) * time.Second); err != nil {
 		log.Fatalln(err)
 	}
 }
